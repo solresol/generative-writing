@@ -1,18 +1,53 @@
-#!/usr/bin/env wish -f
+#!/usr/bin/env wish8.5
 
 set CANVAS_WIDTH 80
 set CANVAS_HEIGHT 80
 set ZOOM 8
 set PARALLEL_OFFSPRING 8
+set MAX_USELESS_OFFSPRING 20
 set STARTING_STROKE_COUNT 3
+set TEMP_DIRECTORY ./tmp
+set USELESS_OFFSPRING 0
+file mkdir $TEMP_DIRECTORY
+
+
+button .makechildren -text "Next generation" -command make_children
+button .startafresh -text "Start afresh" -command start_afresh
+frame .statusvars
+label .statusvars.l1 -text "Failed offspring count:"
+label .statusvars.v1 -textvariable USELESS_OFFSPRING
+pack configure .makechildren .startafresh .statusvars -side top -fill x
+pack configure .statusvars.l1 .statusvars.v1 -side left
+wm title . "Generative Writing"
+
+proc canvasname {i} {
+    return .offspring.frame$i.c
+}
+
+proc labelname {i} {
+    return .offspring.frame$i.l
+}
+
+proc framename {i} {
+    return .offspring.frame$i
+}
+
+proc textname {i} {
+    return .offspring.frame$i.t
+}
+
 canvas .big -width [expr $CANVAS_WIDTH*$ZOOM] -height [expr $CANVAS_HEIGHT*$ZOOM]
-frame .offspring -background blue
+frame .offspring
 
 pack configure  .big .offspring -side left -anchor n
 
 for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
-    canvas .offspring.c$i -width $CANVAS_WIDTH -height $CANVAS_HEIGHT -background white
-    pack configure .offspring.c$i -side top -anchor w -ipady 1
+    frame [framename $i] -width [expr $CANVAS_WIDTH * 2 + 3] -background blue
+    pack configure [framename $i] -side top -anchor w -ipady 1  
+    canvas [canvasname $i] -width $CANVAS_WIDTH -height $CANVAS_HEIGHT -background white
+    label [labelname $i]  -background blue -width 10
+    text [textname $i] -height 3
+    pack configure [canvasname $i] [labelname $i] [textname $i] -side left -ipadx 1 -ipady 1
 }
 
 
@@ -53,6 +88,7 @@ proc random_drawing {} {
     global CANVAS_WIDTH
     global CANVAS_HEIGHT
     global STARTING_STROKE_COUNT
+    set strokes [expr 1+floor(rand() * $STARTING_STROKE_COUNT)]
     set answer {}
     for {set i 0} {$i < $STARTING_STROKE_COUNT} {incr i} {
 	if { rand() > 0.5 } {
@@ -186,38 +222,91 @@ proc clear_drawing {} {
     .big delete all
     global PARALLEL_OFFSPRING
     for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
-	.offspring.c$i delete all
+	[canvasname $i] delete all
     }
 }
-		   
 
-set CURRENT_DRAWING [random_drawing]
 
 proc make_children {} {
     global NEXT_GENERATION
     global PARALLEL_OFFSPRING
     global CURRENT_DRAWING
+    global TEMP_DIRECTORY
+    global USELESS_OFFSPRING
+    
+    for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
+	[canvasname $i] delete all
+	[framename $i] configure -background blue
+	[labelname $i] configure -background blue
+	[textname $i] delete 1.0 end
+    }
     for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
 	set NEXT_GENERATION($i) [mutate $CURRENT_DRAWING]
-	draw_drawing_on_canvas .offspring.c$i $NEXT_GENERATION($i)
+	draw_drawing_on_canvas [canvasname $i] $NEXT_GENERATION($i)
+	[labelname $i] configure -text "Working..."
+	update
+	[canvasname $i] postscript -file $TEMP_DIRECTORY/img$i.ps
+	exec convert $TEMP_DIRECTORY/img$i.ps $TEMP_DIRECTORY/img$i.png
+	set output [exec -ignorestderr tesseract $TEMP_DIRECTORY/img$i.png stdout --psm 10 hocr 2>/dev/null ]
+	set output [regsub {.*<div[^>]*>} $output ""]
+	set output [regsub {</div>.*} $output ""]
+	set output [string trim $output]
+	if {[string equal $output ""]} {
+	    incr USELESS_OFFSPRING
+	    [framename $i] configure -background red
+	    [labelname $i] configure -background red	    
+	    [labelname $i] configure -text $output
+	} else {
+	    [framename $i] configure -background lightgreen
+	    [labelname $i] configure -background lightgreen
+	    [textname $i] insert end $output
+	    regexp {x_wconf ([0-9]+)} $output confidence
+	    set output [regsub {.*<span class="ocrx_word"[^>]>} $output ""]
+	    set output [regsub {</span>.*} $output ""]
+	    set output [string trim $output]
+	    [labelname $i] configure -text "$output\nConfidence: $confidence"
+	}
     }
 }
+
+    
 
 
 proc next_generation {} {
     global CURRENT_DRAWING
     clear_drawing
-    set CURRENT_DRAWING 
     draw_drawing $CURRENT_DRAWING
 }
 
 
+proc start_afresh {} {
+    global CURRENT_DRAWING
+    global USELESS_OFFSPRING
+    set CURRENT_DRAWING [random_drawing]
+    set USELESS_OFFSPRING 0
+    draw_drawing $CURRENT_DRAWING
+}
 
-draw_drawing $CURRENT_DRAWING
-make_children
+proc cycle {} {
+    global USELESS_OFFSPRING
+    global PARALLEL_OFFSPRING
+    global MAX_USELESS_OFFSPRING
+    while {1} {
+	set before $USELESS_OFFSPRING
+	make_children
+	set after $USELESS_OFFSPRING
+	puts "Before: $before   After: $after"
+	if {$before + $PARALLEL_OFFSPRING > $after} {
+	    return
+	}
+	if {$USELESS_OFFSPRING > $MAX_USELESS_OFFSPRING} {
+	    start_afresh
+	}
+	update
+	puts "Pathetic..."
+    }
+}
 
 
-
-#button .b -text "Mutate" -command next_generation
-#pack .b
-
+start_afresh
+cycle
