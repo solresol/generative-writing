@@ -43,7 +43,7 @@ pack configure  .big .offspring -side left -anchor n
 
 for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
     frame [framename $i] -width [expr $CANVAS_WIDTH * 2 + 3] -background blue
-    pack configure [framename $i] -side top -anchor w -ipady 1  
+    pack configure [framename $i] -side top -anchor w -ipady 1
     canvas [canvasname $i] -width $CANVAS_WIDTH -height $CANVAS_HEIGHT -background white
     label [labelname $i]  -background blue -width 10
     text [textname $i] -height 3
@@ -129,7 +129,7 @@ proc mutate_arc {arc} {
     set right [lindex $arc 3]
     set bottom [lindex $arc 4]
     set arc_start [lindex $arc 5]
-    set arc_range [lindex $arc 6]	
+    set arc_range [lindex $arc 6]
     if { rand() > 0.5 } {
 	# mutate bounding box
 	set delta [expr 20 - floor(rand() * 41)]
@@ -233,7 +233,7 @@ proc make_children {} {
     global CURRENT_DRAWING
     global TEMP_DIRECTORY
     global USELESS_OFFSPRING
-    
+
     for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
 	[canvasname $i] delete all
 	[framename $i] configure -background blue
@@ -254,14 +254,16 @@ proc make_children {} {
 	if {[string equal $output ""]} {
 	    incr USELESS_OFFSPRING
 	    [framename $i] configure -background red
-	    [labelname $i] configure -background red	    
+	    [labelname $i] configure -background red
 	    [labelname $i] configure -text $output
 	} else {
 	    [framename $i] configure -background lightgreen
 	    [labelname $i] configure -background lightgreen
 	    [textname $i] insert end $output
-	    regexp {x_wconf ([0-9]+)} $output confidence
-	    set output [regsub {.*<span class="ocrx_word"[^>]>} $output ""]
+	    regexp {x_wconf ([0-9]+)} $output matching_text confidence
+	    set output [regsub {.*<p[^>]*>} $output ""]
+	    set output [regsub {</p>.*} $output ""]
+	    set output [regsub {.*<span class="ocrx_word"[^>]*>} $output ""]
 	    set output [regsub {</span>.*} $output ""]
 	    set output [string trim $output]
 	    [labelname $i] configure -text "$output\nConfidence: $confidence"
@@ -269,7 +271,7 @@ proc make_children {} {
     }
 }
 
-    
+
 
 
 proc next_generation {} {
