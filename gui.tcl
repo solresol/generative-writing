@@ -8,6 +8,8 @@ set MAX_USELESS_OFFSPRING 20
 set STARTING_STROKE_COUNT 3
 set TEMP_DIRECTORY ./tmp
 set USELESS_OFFSPRING 0
+set NUMBER_OF_GENERATIONS 0
+set LAST_CONFIDENCE 0
 file mkdir $TEMP_DIRECTORY
 
 
@@ -19,6 +21,8 @@ label .statusvars.v1 -textvariable USELESS_OFFSPRING
 pack configure .makechildren .startafresh .statusvars -side top -fill x
 pack configure .statusvars.l1 .statusvars.v1 -side left
 wm title . "Generative Writing"
+frame .history  -background yellow
+pack configure .history -side bottom
 
 proc canvasname {i} {
     return .offspring.frame$i.c
@@ -107,7 +111,7 @@ proc mutate_line {line} {
     set end_y [lindex $line 4]
     set delta [expr 20 - floor(rand() * 41)]
     set which [lindex {start_x start_y end_x end_y} [expr int(floor(rand() * 4))]]
-    puts "Modifying $which"
+    #puts "Modifying $which"
     upvar 0 $which modified
     set modified [expr $modified + $delta]
     if {$start_x < 0} { set start_x 0 }
@@ -176,16 +180,16 @@ proc mutate {drawing} {
     set task_random [expr rand()]
     set where [expr int(floor(rand() * $drawing_length))]
     if {$task_random < 0.125} {
-	puts "$task_random Adding a line"
+	#puts "$task_random Adding a line"
 	lappend drawing [random_line]
     } elseif {$task_random < 0.25} {
-	puts "$task_random Adding an arc"
+	#puts "$task_random Adding an arc"
 	lappend drawing [random_arc]
     } elseif {($task_random < 0.5) && ($drawing_length > 1)} {
-	puts "$task_random Removing an element"
+	#puts "$task_random Removing an element"
 	set drawing [lreplace $drawing $where $where]
     } else {
-	puts "$task_random Changing element $where"
+	#puts "$task_random Changing element $where"
 	set what [lindex $drawing $where]
 	if {[string compare [lindex $what 0] line] == 0} {
 	    set replacement [mutate_line $what]
@@ -199,7 +203,7 @@ proc mutate {drawing} {
 
 proc draw_drawing_on_canvas {canvas drawing} {
     foreach etch $drawing {
-	puts $etch
+	#puts $etch
 	switch [lindex $etch 0] {
 	    line {
 		$canvas create line [lindex $etch 1] [lindex $etch 2] [lindex $etch 3] [lindex $etch 4]
@@ -233,6 +237,7 @@ proc make_children {} {
     global CURRENT_DRAWING
     global TEMP_DIRECTORY
     global USELESS_OFFSPRING
+    set productive_offspring {}
 
     for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
 	[canvasname $i] delete all
@@ -247,28 +252,26 @@ proc make_children {} {
 	update
 	[canvasname $i] postscript -file $TEMP_DIRECTORY/img$i.ps
 	exec convert $TEMP_DIRECTORY/img$i.ps $TEMP_DIRECTORY/img$i.png
-	set output [exec -ignorestderr tesseract $TEMP_DIRECTORY/img$i.png stdout --psm 10 hocr 2>/dev/null ]
-	set output [regsub {.*<div[^>]*>} $output ""]
-	set output [regsub {</div>.*} $output ""]
-	set output [string trim $output]
-	if {[string equal $output ""]} {
+	set output [exec -ignorestderr tesseract $TEMP_DIRECTORY/img$i.png stdout --psm 10 hocr 2>/dev/null | ./hocr2list.py ]
+	puts "Output = $output"
+	set output [lindex $output 0]
+	if {[llength $output] == 0} {
 	    incr USELESS_OFFSPRING
 	    [framename $i] configure -background red
 	    [labelname $i] configure -background red
-	    [labelname $i] configure -text $output
+	    [labelname $i] configure -text ""
 	} else {
 	    [framename $i] configure -background lightgreen
 	    [labelname $i] configure -background lightgreen
-	    [textname $i] insert end $output
-	    regexp {x_wconf ([0-9]+)} $output matching_text confidence
-	    set output [regsub {.*<p[^>]*>} $output ""]
-	    set output [regsub {</p>.*} $output ""]
-	    set output [regsub {.*<span class="ocrx_word"[^>]*>} $output ""]
-	    set output [regsub {</span>.*} $output ""]
-	    set output [string trim $output]
-	    [labelname $i] configure -text "$output\nConfidence: $confidence"
+	    set confidence [lindex $output 1]
+	    set word_found [lindex $output 3]
+	    [textname $i] insert end $word_found
+	    [labelname $i] configure -text "$confidence%"
+	    lappend productive_offspring $confidence $word_found $i
+	    puts "$productive_offspring"
 	}
     }
+    return $productive_offspring
 }
 
 
@@ -293,20 +296,47 @@ proc cycle {} {
     global USELESS_OFFSPRING
     global PARALLEL_OFFSPRING
     global MAX_USELESS_OFFSPRING
+    global NEXT_GENERATION
+    global NUMBER_OF_GENERATIONS
+    global LAST_CONFIDENCE
     while {1} {
-	set before $USELESS_OFFSPRING
-	make_children
-	set after $USELESS_OFFSPRING
-	puts "Before: $before   After: $after"
-	if {$before + $PARALLEL_OFFSPRING > $after} {
-	    return
+	set good_children [make_children]
+	if {[llength $good_children] > 0} {
+	    set most_confident 0
+	    set best_drawing -1
+	    foreach {confidence word i} $good_children {
+		if {$confidence > $most_confident} {
+		    set best_drawing $i
+		    set most_confident $confidence
+		}
+	    }
+	    puts "The best is drawing $i"
+	    if {$LAST_CONFIDENCE > $most_confident} {
+		continue
+	    }
+	    set LAST_CONFIDENCE $most_confident
+	    replace_main_drawing $NEXT_GENERATION($i)
+	    set USELESS_OFFSPRING 0
 	}
-	if {$USELESS_OFFSPRING > $MAX_USELESS_OFFSPRING} {
+	if {$USELESS_OFFSPRING > $MAX_USELESS_OFFSPRING && $NUMBER_OF_GENERATIONS == 0} {
 	    start_afresh
 	}
 	update
 	puts "Pathetic..."
     }
+}
+
+proc replace_main_drawing {drawing} {
+    global CURRENT_DRAWING
+    global NUMBER_OF_GENERATIONS
+    global CANVAS_WIDTH
+    global CANVAS_HEIGHT
+    canvas .history.$NUMBER_OF_GENERATIONS -width $CANVAS_WIDTH -height $CANVAS_HEIGHT
+    pack .history.$NUMBER_OF_GENERATIONS -side left -ipadx 2 -ipady 2
+    draw_drawing_on_canvas .history.$NUMBER_OF_GENERATIONS $CURRENT_DRAWING
+    set $CURRENT_DRAWING $drawing
+    draw_drawing $drawing
+    incr NUMBER_OF_GENERATIONS
 }
 
 
