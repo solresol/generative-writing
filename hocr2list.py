@@ -2,8 +2,11 @@
 
 import bs4
 import sys
+import string
 
 html = sys.stdin.read()
+sys.stderr.write("===========================================\n")
+sys.stderr.write(html)
 soup = bs4.BeautifulSoup(html, 'lxml')
 spans = soup.find_all('span')
 most_confidence = 0
@@ -24,13 +27,24 @@ for span in spans:
             span = span.find('strong')
         if span.find('em'):
             span = span.find('em')
-        character = list(span.children)[0]
+        try:
+            character = list(span.children)[0]
+        except IndexError:
+            continue
         if "{" in character or "}" in character:
             # pretend it isn't there -- too hard, and not interesting anyway
             continue
         if character.strip() == '':
             # successfully doing whitespace isn't a great achievement
             continue
+        good = True
+        for c in character:
+            if c not in string.ascii_letters:
+                good = False
+        if not(good):
+            continue
+        if '\\' in character:
+            character = character.replace('\\', '\\\\')
         if confidence > most_confidence:
             most_confidence = confidence
             most_confident_word = character
