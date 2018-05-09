@@ -5,21 +5,29 @@ set CANVAS_HEIGHT 80
 set ZOOM 8
 set PARALLEL_OFFSPRING 8
 set MAX_USELESS_OFFSPRING 20
-set STARTING_STROKE_COUNT 3
+set USELESS_OFFSPRING_DESPERATION_COUNT 200
+set STARTING_STROKE_COUNT 5
 set TEMP_DIRECTORY ./tmp
+set SUCCESS_DIRECTORY ./best
 set USELESS_OFFSPRING 0
 set NUMBER_OF_GENERATIONS 0
 set LAST_CONFIDENCE 0
+set LOOKS_LIKE ""
 file mkdir $TEMP_DIRECTORY
 
 
-button .makechildren -text "Next generation" -command make_children
-button .startafresh -text "Start afresh" -command start_afresh
+#button .makechildren -text "Next generation" -command make_children
+#button .startafresh -text "Start afresh" -command start_afresh
 frame .statusvars
 label .statusvars.l1 -text "Failed offspring count:"
 label .statusvars.v1 -textvariable USELESS_OFFSPRING
-pack configure .makechildren .startafresh .statusvars -side top -fill x
-pack configure .statusvars.l1 .statusvars.v1 -side left
+label .statusvars.l2 -text "Confidence:"
+label .statusvars.v2 -textvariable LAST_CONFIDENCE
+label .statusvars.l3 -text "Looks like:"
+label .statusvars.v3 -textvariable LOOKS_LIKE
+
+#pack configure .makechildren .startafresh .statusvars -side top -fill x
+pack configure .statusvars.l1 .statusvars.v1 .statusvars.l2 .statusvars.v2 .statusvars.l3 .statusvars.v3 -side left -ipady 5
 wm title . "Generative Writing"
 frame .history  -background yellow
 pack configure .history -side bottom
@@ -54,6 +62,14 @@ for {set i 0} {$i < $PARALLEL_OFFSPRING} {incr i} {
     pack configure [canvasname $i] [labelname $i] [textname $i] -side left -ipadx 1 -ipady 1
 }
 
+proc random_distance_delta {} {
+    global USELESS_OFFSPRING
+    global USELESS_OFFSPRING_DESPERATION_COUNT
+    if {$USELESS_OFFSPRING > $USELESS_OFFSPRING_DESPERATION_COUNT} {
+	return [expr 100 - int(rand() * 201)]
+    }
+    return [expr 20 - int(rand() * 41)]
+}
 
 proc random_line {} {
     global CANVAS_WIDTH
@@ -109,7 +125,7 @@ proc mutate_line {line} {
     set start_y [lindex $line 2]
     set end_x [lindex $line 3]
     set end_y [lindex $line 4]
-    set delta [expr 20 - floor(rand() * 41)]
+    set delta [random_distance_delta]
     set which [lindex {start_x start_y end_x end_y} [expr int(floor(rand() * 4))]]
     #puts "Modifying $which"
     upvar 0 $which modified
@@ -136,7 +152,7 @@ proc mutate_arc {arc} {
     set arc_range [lindex $arc 6]
     if { rand() > 0.5 } {
 	# mutate bounding box
-	set delta [expr 20 - floor(rand() * 41)]
+	set delta [random_distance_delta]
 	set which [lindex {left top right bottom} [expr int(floor(rand() * 4))]]
 	upvar 0 $which modified
 	set modified [expr $modified + $delta]
@@ -161,7 +177,7 @@ proc mutate_arc {arc} {
 	    set top $a
 	}
     } else {
-	set delta [expr 20-floor(rand()*41)]
+	set delta [random_distance_delta]
 	if {rand() < 0.5} {
 	    set arc_start [expr $arc_start + $delta]
 	} else {
@@ -175,7 +191,7 @@ proc mutate_arc {arc} {
     return [list arc $left $top $right $bottom $arc_start $arc_range]
 }
 
-proc mutate {drawing} {
+proc mutate {drawing {mutation_count 1}} {
     set drawing_length [llength $drawing]
     set task_random [expr rand()]
     set where [expr int(floor(rand() * $drawing_length))]
@@ -198,6 +214,7 @@ proc mutate {drawing} {
 	}
 	set drawing [lreplace $drawing $where $where $replacement]
     }
+    return $drawing
 }
 
 
@@ -252,7 +269,7 @@ proc make_children {} {
 	update
 	[canvasname $i] postscript -file $TEMP_DIRECTORY/img$i.ps
 	exec convert $TEMP_DIRECTORY/img$i.ps $TEMP_DIRECTORY/img$i.png
-	set output [exec -ignorestderr tesseract $TEMP_DIRECTORY/img$i.png stdout --psm 10 hocr 2>/dev/null | ./hocr2list.py ]
+	set output [exec -ignorestderr tesseract $TEMP_DIRECTORY/img$i.png stdout --psm 10 hocr 2>> .tesseract.log | ./hocr2list.py 2>> .hocr2list.log ]
 	puts "Output = $output"
 	set output [lindex $output 0]
 	if {[llength $output] == 0} {
@@ -292,6 +309,18 @@ proc start_afresh {} {
     draw_drawing $CURRENT_DRAWING
 }
 
+proc flash_frame {i} {
+    for {set j 0} {$j < 3} {incr j} {
+	[framename $i] configure -background yellow
+	update
+	after 250
+	[framename $i] configure -background lightgreen
+	update
+	after 250
+    }
+    
+}
+
 proc cycle {} {
     global USELESS_OFFSPRING
     global PARALLEL_OFFSPRING
@@ -299,23 +328,27 @@ proc cycle {} {
     global NEXT_GENERATION
     global NUMBER_OF_GENERATIONS
     global LAST_CONFIDENCE
+    global LOOKS_LIKE
     while {1} {
 	set good_children [make_children]
 	if {[llength $good_children] > 0} {
 	    set most_confident 0
 	    set best_drawing -1
+	    set best_word ""
 	    foreach {confidence word i} $good_children {
 		if {$confidence > $most_confident} {
 		    set best_drawing $i
 		    set most_confident $confidence
+		    set best_word $word
 		}
 	    }
-	    puts "The best is drawing $i"
-	    if {$LAST_CONFIDENCE > $most_confident} {
+	    if {$LAST_CONFIDENCE >= $most_confident} {
 		continue
 	    }
-	    set LAST_CONFIDENCE $most_confident
+	    flash_frame $best_drawing
 	    replace_main_drawing $NEXT_GENERATION($i)
+	    set LAST_CONFIDENCE $most_confident
+	    set LOOKS_LIKE $best_word 
 	    set USELESS_OFFSPRING 0
 	}
 	if {$USELESS_OFFSPRING > $MAX_USELESS_OFFSPRING && $NUMBER_OF_GENERATIONS == 0} {
@@ -331,10 +364,14 @@ proc replace_main_drawing {drawing} {
     global NUMBER_OF_GENERATIONS
     global CANVAS_WIDTH
     global CANVAS_HEIGHT
-    canvas .history.$NUMBER_OF_GENERATIONS -width $CANVAS_WIDTH -height $CANVAS_HEIGHT
-    pack .history.$NUMBER_OF_GENERATIONS -side left -ipadx 2 -ipady 2
-    draw_drawing_on_canvas .history.$NUMBER_OF_GENERATIONS $CURRENT_DRAWING
-    set $CURRENT_DRAWING $drawing
+    global LAST_CONFIDENCE
+    frame .history.f$NUMBER_OF_GENERATIONS
+    canvas .history.f$NUMBER_OF_GENERATIONS.c -width $CANVAS_WIDTH -height $CANVAS_HEIGHT
+    label .history.f$NUMBER_OF_GENERATIONS.g -text "$LAST_CONFIDENCE%"
+    pack .history.f$NUMBER_OF_GENERATIONS -side left -ipadx 2 -ipady 2
+    pack .history.f$NUMBER_OF_GENERATIONS.c .history.f$NUMBER_OF_GENERATIONS.g -side top -ipadx 2 -ipady 2
+    draw_drawing_on_canvas .history.f$NUMBER_OF_GENERATIONS.c $CURRENT_DRAWING
+    set CURRENT_DRAWING $drawing
     draw_drawing $drawing
     incr NUMBER_OF_GENERATIONS
 }
