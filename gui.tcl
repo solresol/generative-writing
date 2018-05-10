@@ -1,4 +1,4 @@
-#!/usr/bin/env wish8.5
+#!/usr/bin/env wish8.6
 
 set CANVAS_WIDTH 80
 set CANVAS_HEIGHT 80
@@ -6,14 +6,17 @@ set ZOOM 8
 set PARALLEL_OFFSPRING 8
 set MAX_USELESS_OFFSPRING 20
 set USELESS_OFFSPRING_DESPERATION_COUNT 200
+set GIVE_UP_COUNT 2000
 set STARTING_STROKE_COUNT 5
 set TEMP_DIRECTORY ./tmp
 set SUCCESS_DIRECTORY ./best
+set SUCCESSFUL_COUNT -1
 set USELESS_OFFSPRING 0
 set NUMBER_OF_GENERATIONS 0
 set LAST_CONFIDENCE 0
 set LOOKS_LIKE ""
 file mkdir $TEMP_DIRECTORY
+file mkdir $SUCCESS_DIRECTORY
 
 
 #button .makechildren -text "Next generation" -command make_children
@@ -27,6 +30,8 @@ label .statusvars.l3 -text "Looks like:"
 label .statusvars.v3 -textvariable LOOKS_LIKE
 
 #pack configure .makechildren .startafresh .statusvars -side top -fill x
+pack configure .statusvars -side top -fill x
+pack configure .statusvars -side top -fill x
 pack configure .statusvars.l1 .statusvars.v1 .statusvars.l2 .statusvars.v2 .statusvars.l3 .statusvars.v3 -side left -ipady 5
 wm title . "Generative Writing"
 frame .history  -background yellow
@@ -247,6 +252,46 @@ proc clear_drawing {} {
     }
 }
 
+proc next_id {} {
+    global SUCCESSFUL_COUNT
+    global SUCCESS_DIRECTORY
+    set success_id_pathname [file join $SUCCESS_DIRECTORY .id]
+    if {$SUCCESSFUL_COUNT == -1} {
+	if {[file exists $success_id_pathname]} {
+	    # Then we need to read it in
+	    set success_id [open $success_id_pathname]
+	    set SUCCESSFUL_COUNT [read -nonewline $success_id]
+	    close $success_id
+	} else {
+	    set SUCCESSFUL_COUNT 0
+	}
+    } else {
+	incr SUCCESSFUL_COUNT
+    }
+    set success_id [open $success_id_pathname w]
+    puts $success_id $SUCCESSFUL_COUNT
+    close $success_id
+    return $SUCCESSFUL_COUNT
+}
+
+proc save_promising {i scoring} {
+    global NEXT_GENERATION
+    global SUCCESS_DIRECTORY
+    set id [next_id]
+    set img_filename_ps [file join $SUCCESS_DIRECTORY $id.ps]
+    set img_filename_png [file join $SUCCESS_DIRECTORY $id.png]
+    set source_filename [file join $SUCCESS_DIRECTORY $id.commands]
+    set score_filename [file join $SUCCESS_DIRECTORY $id.score]
+    #puts "Writing to $source_filename"
+    [canvasname $i] postscript -file $img_filename_ps
+    exec convert $img_filename_ps $img_filename_png
+    set source_file [open $source_filename w]
+    set score_file [open $score_filename w]
+    puts $source_file $NEXT_GENERATION($i)
+    puts $score_file $scoring
+    close $source_file
+    close $score_file
+}
 
 proc make_children {} {
     global NEXT_GENERATION
@@ -270,7 +315,6 @@ proc make_children {} {
 	[canvasname $i] postscript -file $TEMP_DIRECTORY/img$i.ps
 	exec convert $TEMP_DIRECTORY/img$i.ps $TEMP_DIRECTORY/img$i.png
 	set output [exec -ignorestderr tesseract $TEMP_DIRECTORY/img$i.png stdout --psm 10 hocr 2>> .tesseract.log | ./hocr2list.py 2>> .hocr2list.log ]
-	puts "Output = $output"
 	set output [lindex $output 0]
 	if {[llength $output] == 0} {
 	    incr USELESS_OFFSPRING
@@ -285,7 +329,11 @@ proc make_children {} {
 	    [textname $i] insert end $word_found
 	    [labelname $i] configure -text "$confidence%"
 	    lappend productive_offspring $confidence $word_found $i
-	    puts "$productive_offspring"
+	    #puts "$productive_offspring"
+	    global LAST_CONFIDENCE
+	    if {$confidence > $LAST_CONFIDENCE && $confidence > 65} {
+		save_promising $i $output
+	    }
 	}
     }
     return $productive_offspring
@@ -321,6 +369,15 @@ proc flash_frame {i} {
     
 }
 
+proc is_simpler {i} {
+    global NEXT_GENERATION
+    global CURRENT_DRAWING
+    if {[llength $NEXT_GENERATION($i)] >= [llength $CURRENT_DRAWING]} {
+	return 0
+    }
+    return 1
+}
+
 proc cycle {} {
     global USELESS_OFFSPRING
     global PARALLEL_OFFSPRING
@@ -329,6 +386,7 @@ proc cycle {} {
     global NUMBER_OF_GENERATIONS
     global LAST_CONFIDENCE
     global LOOKS_LIKE
+    global GIVE_UP_COUNT
     while {1} {
 	set good_children [make_children]
 	if {[llength $good_children] > 0} {
@@ -342,7 +400,13 @@ proc cycle {} {
 		    set best_word $word
 		}
 	    }
-	    if {$LAST_CONFIDENCE >= $most_confident} {
+	    # The logic here isn't quite right. Here we only test
+	    # whether the first of the results in the loop that
+	    # was at the equal highest confidence is simpler.
+	    if {$LAST_CONFIDENCE > $most_confident} {
+		continue
+	    }
+	    if {$LAST_CONFIDENCE == $most_confident && ![is_simpler $best_drawing]} {
 		continue
 	    }
 	    flash_frame $best_drawing
@@ -354,8 +418,10 @@ proc cycle {} {
 	if {$USELESS_OFFSPRING > $MAX_USELESS_OFFSPRING && $NUMBER_OF_GENERATIONS == 0} {
 	    start_afresh
 	}
+	if {$USELESS_OFFSPRING > $GIVE_UP_COUNT} {
+	    exit
+	}
 	update
-	puts "Pathetic..."
     }
 }
 
